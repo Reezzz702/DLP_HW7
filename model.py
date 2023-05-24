@@ -1,11 +1,6 @@
 import torch
-import torchvision
 from torch import nn
-from torch.nn import functional as F
-from torch.utils.data import DataLoader
-from diffusers import DDPMScheduler, UNet2DModel
-from matplotlib import pyplot as plt
-from tqdm.auto import tqdm
+from diffusers import UNet2DModel
 
 
 class ClassConditionedUnet(nn.Module):
@@ -17,9 +12,9 @@ class ClassConditionedUnet(nn.Module):
 
     # Self.model is an unconditional UNet with extra input channels to accept the conditioning information (the class embedding)
     self.model = UNet2DModel(
-        sample_size=28,           # the target image resolution
-        in_channels=1 + class_emb_size, # Additional input channels for class cond.
-        out_channels=1,           # the number of output channels
+        sample_size=64,           # the target image resolution
+        in_channels=3 + 24, # Additional input channels for class cond.
+        out_channels=3,           # the number of output channels
         layers_per_block=2,       # how many ResNet layers to use per UNet block
         block_out_channels=(32, 64, 64), 
         down_block_types=( 
@@ -35,12 +30,13 @@ class ClassConditionedUnet(nn.Module):
     )
 
   # Our forward method now takes the class labels as an additional argument
-  def forward(self, x, t, class_labels):
+  def forward(self, x, t, class_cond):
     # Shape of x:
     bs, ch, w, h = x.shape
     
     # class conditioning in right shape to add as additional input channels
-    class_cond = self.class_emb(class_labels) # Map to embedding dinemsion
+    # class_cond = self.class_emb(class_labels) # Map to embedding dinemsion
+    # print(class_cond.shape)
     class_cond = class_cond.view(bs, class_cond.shape[1], 1, 1).expand(bs, class_cond.shape[1], w, h)
     # x is shape (bs, 1, 28, 28) and class_cond is now (bs, 4, 28, 28)
 
