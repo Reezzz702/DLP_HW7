@@ -73,7 +73,8 @@ class iclevrDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.mode == 'train':
-            image = Image.open(os.path.join(self.root, self.filenames[idx])).convert('RGB')
+            image_root = self.root + "/iclevr"
+            image = Image.open(os.path.join(image_root, self.filenames[idx])).convert('RGB')
             image = self.transform(image)
             label = torch.Tensor(self.labels[idx])
             return image, label
