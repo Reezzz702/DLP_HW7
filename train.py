@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from diffusers import DDPMScheduler
 from torchvision.utils import save_image
 from tqdm.auto import tqdm
-from model import ClassConditionedUnet
+from model import ClassConditionedUnet, BigClassConditionedUnet
 from evaluator import evaluation_model
 from dataset import iclevrDataset
 import numpy as np
@@ -20,15 +20,19 @@ class Trainer():
         self.device = args.device
         self.n_epochs = args.epochs
         self.lr = args.lr
-        self.logdir = args.logdir
+        self.savedir = f"{args.logdir}/{args.unet}Unet"
         self.eval_freq = args.eval_freq
         self.stat_ep = 0
 
-        self.writer = SummaryWriter(self.logdir)
+        self.writer = SummaryWriter(self.savedir)
         self.train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=12)
         self.test_dataloader = DataLoader(test_data, batch_size=len(test_data), shuffle=False, num_workers=12)
         
-        self.net = ClassConditionedUnet(num_classes=24).to(self.device)
+        if args.unet == "small":
+            self.net = ClassConditionedUnet().to(self.device)
+        else:
+            self.net = BigClassConditionedUnet().to(self.device)
+
         self.noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule='squaredcos_cap_v2')
         self.loss_fn = nn.MSELoss()
         self.opt = torch.optim.Adam(self.net.parameters(), lr=self.lr)
@@ -37,9 +41,9 @@ class Trainer():
         if args.resume != 0:
             self.stat_ep = args.resume
             print("#"*50)
-            print(f'resume from {self.logdir}/epoch_{args.resume}.pth ...........')
+            print(f'resume from {self.savedir}/epoch_{args.resume}.pth ...........')
             print("#"*50)
-            self.net.load_state_dict(torch.load(f"{self.logdir}/epoch_{args.resume}.pth"))
+            self.net.load_state_dict(torch.load(f"{self.savedir}/epoch_{args.resume}.pth"))
 
     def train(self):
         # TODO
@@ -49,10 +53,10 @@ class Trainer():
             for x, y in self.train_dataloader:
                 
                 # Get some data and prepare the corrupted version
-                x = x.to(self.device) * 2 - 1 # Data on the GPU (mapped to (-1, 1))
+                x = x.to(self.device)
                 y = y.to(self.device)
                 noise = torch.randn_like(x)
-                timesteps = torch.randint(0, 999, (x.shape[0],)).long().to(self.device)
+                timesteps = torch.randint(0, 1000, (x.shape[0],)).long().to(self.device)
                 noisy_x = self.noise_scheduler.add_noise(x, noise, timesteps)
 
                 # Get the model prediction
@@ -72,20 +76,22 @@ class Trainer():
             # Print our the average of the last 100 loss values to get an idea of progress:
             avg_loss = sum(losses[-100:])/100
             self.writer.add_scalar("train loss", avg_loss, epoch)
-            if epoch % self.eval_freq == 0 and epoch != 0:
+            if (epoch+1) % self.eval_freq == 0:
+                print("val")
                 val_acc = self.test(epoch=epoch)
+                self.net.train()
                 if val_acc > best_acc:
                     best_acc = val_acc
-                    torch.save(self.net.state_dict(), f"{self.logdir}/best.pth")
-                torch.save(self.net.state_dict(), f"{self.logdir}/epoch_{epoch}.pth")
+                    torch.save(self.net.state_dict(), f"{self.savedir}/best.pth")
+                torch.save(self.net.state_dict(), f"{self.savedir}/epoch_{epoch + 1}.pth")
 
     def test(self, epoch=None):
         # TODO
         if not epoch:
             print("#"*50)
-            print(f'load from {self.logdir}/best.pth to test.')
+            print(f'load from {self.savedir}/best.pth to test.')
             print("#"*50)
-            self.net.load_state_dict(torch.load(f"{self.logdir}/best.pth"))
+            self.net.load_state_dict(torch.load(f"{self.savedir}/best.pth"))
 
         self.net.eval()
         acc = []
@@ -109,25 +115,26 @@ class Trainer():
             return np.mean(acc)
         else:
             print(f"test accuray: {np.mean(acc)}")
-            save_image(x.detach(), f'{self.logdir}/test_{np.mean(acc)*100:.1f}%.png', normalize=True)
+            save_image(x.detach(), f'{self.savedir}/test_{np.mean(acc)*100:.1f}%.png', normalize=True)
 
 def main():
     # TODO
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-d', '--device', default='cuda')
-    parser.add_argument('--logdir', default='log/SimpleUnet')
+    parser.add_argument('--logdir', default='log/')
     # train
-    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--unet', default="Simple", type=str)
+    parser.add_argument('--epochs', default=100, type=int)
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--lr', default=1e-3, type=float)
-    parser.add_argument('--eval_freq', default=5, type=int)
+    parser.add_argument('--eval_freq', default=10, type=int)
     parser.add_argument('--resume', default=0, type=int)
     # test
     parser.add_argument('--test_only', action='store_true')
 
     args = parser.parse_args()
     
-    os.makedirs(args.logdir, exist_ok=True)
+    os.makedirs(f"{args.logdir}/{args.unet}Unet", exist_ok=True)
     train_data = iclevrDataset(mode='train', root='dataset')
     test_data = iclevrDataset(mode='test', root='dataset')
     trainer = Trainer(args, train_data, test_data)
