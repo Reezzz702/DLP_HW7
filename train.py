@@ -1,5 +1,5 @@
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from diffusers import DDPMScheduler
 from torchvision.utils import save_image
@@ -11,8 +11,7 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 import os
-
-
+from diffusers.optimization import get_cosine_schedule_with_warmup
 
 class Trainer():
     def __init__(self, args, train_data, test_data):
@@ -33,10 +32,15 @@ class Trainer():
         else:
             self.net = BigClassConditionedUnet().to(self.device)
 
-        self.noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule='squaredcos_cap_v2')
-        self.loss_fn = nn.MSELoss()
+        self.noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule='linear')
+        # self.loss_fn = nn.MSELoss()
         self.opt = torch.optim.Adam(self.net.parameters(), lr=self.lr)
         self.evalator = evaluation_model()
+        self.lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer=self.opt,
+            num_warmup_steps=args.lr_warmup_steps,
+            num_training_steps=(len(self.train_dataloader) * self.n_epochs),
+        )
 
         if args.resume != 0:
             self.stat_ep = args.resume
@@ -56,19 +60,21 @@ class Trainer():
                 x = x.to(self.device)
                 y = y.to(self.device)
                 noise = torch.randn_like(x)
-                timesteps = torch.randint(0, 1000, (x.shape[0],)).long().to(self.device)
+                timesteps = torch.randint(0, self.noise_scheduler.num_train_timesteps, (x.shape[0],)).long().to(self.device)
                 noisy_x = self.noise_scheduler.add_noise(x, noise, timesteps)
 
                 # Get the model prediction
                 pred = self.net(noisy_x, timesteps, y) # Note that we pass in the labels y
 
                 # Calculate the loss
-                loss = self.loss_fn(pred, noise) # How close is the output to the noise
+                loss = F.mse_loss(pred, noise) # How close is the output to the noise
 
                 # Backprop and update the params:
-                self.opt.zero_grad()
                 loss.backward()
                 self.opt.step()
+                if self.lr_scheduler:
+                    self.lr_scheduler.step()
+                self.opt.zero_grad()
 
                 # Store the loss for later
                 losses.append(loss.item())
@@ -77,13 +83,35 @@ class Trainer():
             avg_loss = sum(losses[-100:])/100
             self.writer.add_scalar("train loss", avg_loss, epoch)
             if (epoch+1) % self.eval_freq == 0:
-                print("val")
-                val_acc = self.test(epoch=epoch)
-                self.net.train()
+                val_acc = self.validation()
+                self.writer.add_scalar("val acc", val_acc, epoch)
+                # self.net.train()
                 if val_acc > best_acc:
                     best_acc = val_acc
                     torch.save(self.net.state_dict(), f"{self.savedir}/best.pth")
                 torch.save(self.net.state_dict(), f"{self.savedir}/epoch_{epoch + 1}.pth")
+    
+    def validation(self):
+        acc = []
+
+        for _, cond in self.train_dataloader:
+            cond = cond.to(self.device)
+            batch_size = cond.size(0)
+            x = torch.randn(batch_size, 3, 64, 64).to(self.device)
+            for _, t in enumerate(self.noise_scheduler.timesteps):
+
+                # Get model pred
+                with torch.no_grad():
+                    residual = self.net(x, t, cond)  # Again, note that we pass in our labels y
+
+                # Update sample with step
+                x = self.noise_scheduler.step(residual, t, x).prev_sample
+
+            acc.append(self.evalator.eval(x, cond))
+            break
+        
+        return np.mean(acc)
+
 
     def test(self, epoch=None):
         # TODO
@@ -93,8 +121,9 @@ class Trainer():
             print("#"*50)
             self.net.load_state_dict(torch.load(f"{self.savedir}/best.pth"))
 
-        self.net.eval()
+        # self.net.eval()
         acc = []
+
         for _, cond in enumerate(self.test_dataloader):
             cond = cond.to(self.device)
             batch_size = cond.size(0)
@@ -129,6 +158,7 @@ def main():
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--eval_freq', default=10, type=int)
     parser.add_argument('--resume', default=0, type=int)
+    parser.add_argument('--lr_warmup_steps', default=500, type=float)
     # test
     parser.add_argument('--test_only', action='store_true')
 

@@ -1,4 +1,3 @@
-from fileinput import filename
 import os
 import numpy as np
 from PIL import Image
@@ -9,28 +8,7 @@ from torch.utils.data import DataLoader
 import json
 from tqdm import tqdm
 
-def custom_transform(mode):
-    normalize = transforms.Normalize(
-        mean=[0.5, 0.5, 0.5],
-        std=[0.5, 0.5, 0.5]
-    )
-    # Transformer
-    if mode == 'train':
-        transformer = transforms.Compose([
-            transforms.Resize((64, 64)),
-            transforms.ToTensor(),
-            normalize
-        ])
-    else:
-        transformer = transforms.Compose([
-            transforms.ToTensor(),
-            normalize
-        ])
-
-    return transformer
-
-
-def getData(mode, root, test_file='test.json'):
+def getLabel(mode, root, test_file='test.json'):
     label_map = json.load(open(os.path.join(root, 'objects.json')))
     filenames = None
     if mode == 'train':
@@ -39,7 +17,7 @@ def getData(mode, root, test_file='test.json'):
         labels_list = list(data_json.values())
         one_hot_vector_list = []
         for i in range(len(labels_list)):
-            one_hot_vector = np.zeros(24, dtype=np.int)
+            one_hot_vector = np.zeros(24, dtype=np.intc) # 24 is the number of objects
             for j in labels_list[i]:
                 one_hot_vector[label_map[j]] = 1
             one_hot_vector_list.append(one_hot_vector)
@@ -50,7 +28,7 @@ def getData(mode, root, test_file='test.json'):
         labels_list = data_json
         one_hot_vector_list = []
         for i in range(len(labels_list)):
-            one_hot_vector = np.zeros(24, dtype=np.int)
+            one_hot_vector = np.zeros(24, dtype=np.intc)
             for j in labels_list[i]:
                 one_hot_vector[label_map[j]] = 1
             one_hot_vector_list.append(one_hot_vector)
@@ -60,21 +38,28 @@ def getData(mode, root, test_file='test.json'):
 
 
 class iclevrDataset(Dataset):
-    def __init__(self, mode, root, test_file='test.json'):
+
+    def __init__(self, mode, root='./dataset', test_file='test.json'):
         self.filenames = None
         self.labels = None
         self.mode = mode
         self.root = root
-        self.filenames, self.labels = getData(mode, root, test_file=test_file)
-        self.transform = custom_transform(mode)
+        self.filenames, self.labels = getLabel(mode, root, test_file=test_file)
+        self.transform = transforms.Compose([
+            transforms.Resize((64, 64)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.5, 0.5, 0.5],
+                std=[0.5, 0.5, 0.5]
+            )
+        ])
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
         if self.mode == 'train':
-            image_root = self.root + "/iclevr"
-            image = Image.open(os.path.join(image_root, self.filenames[idx])).convert('RGB')
+            image = Image.open(os.path.join(self.root, 'iclevr', self.filenames[idx])).convert('RGB')
             image = self.transform(image)
             label = torch.Tensor(self.labels[idx])
             return image, label
@@ -83,13 +68,6 @@ class iclevrDataset(Dataset):
             return label
 
 
-if __name__ == '__main__':
-    dataset = iclevrDataset(mode='train', root='iclevr')
-    print(len(dataset))
-    train_dataloader = DataLoader(
-        iclevrDataset(mode='test', root='iclevr'),
-        batch_size=4,
-        shuffle=True
-    )
-    for i, label in enumerate(tqdm(train_dataloader)):
-        pass
+
+
+
