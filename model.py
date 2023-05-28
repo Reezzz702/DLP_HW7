@@ -94,3 +94,42 @@ class BigClassConditionedUnet(nn.Module):
 
 		# Feed this to the unet alongside the timestep and return the prediction
 		return self.model(net_input, t).sample # (bs, 1, 28, 28)
+	
+class BaseConditionedUnet(nn.Module):
+    def __init__(self, num_classes=24):
+        super().__init__()
+
+        # self.model is an unconditional Unet with extra channels for class conditioning
+        self.model = UNet2DModel(
+            sample_size=64,  # the target image resolution
+            in_channels=3+num_classes,  # the number of input channels, 3 for RGB images
+            out_channels=3,  # the number of output channels
+            layers_per_block=2,  # how many ResNet layers to use per UNet block
+            block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channels for each UNet block
+            down_block_types=(
+                "DownBlock2D",  # a regular ResNet downsampling block
+                "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",  # a ResNet downsampling block with spatial self-attention
+                "AttnDownBlock2D",  # a ResNet downsampling block with spatial self-attention
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",  # a regular ResNet upsampling block
+                "AttnUpBlock2D",  # a ResNet upsampling block with spatial self-attention
+                "UpBlock2D",  # a ResNet upsampling block with spatial self-attention
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+        )
+    
+    def forward(self, x, t, cond):
+        # Shape os x:
+        bs, ch, w, h = x.shape
+        cond = cond.view(bs, cond.shape[1], 1, 1).expand(bs, cond.shape[1], w, h)
+
+        net_input = torch.cat([x, cond], dim=1)
+        output = self.model(sample=net_input, timestep=t).sample
+
+        return output

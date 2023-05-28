@@ -39,7 +39,7 @@ def getLabel(mode, root, test_file='test.json'):
 
 class iclevrDataset(Dataset):
 
-    def __init__(self, mode, root='./dataset', test_file='test.json'):
+    def __init__(self, mode, root='./dataset', test_file='new_test.json'):
         self.filenames = None
         self.labels = None
         self.mode = mode
@@ -66,8 +66,3 @@ class iclevrDataset(Dataset):
         else:
             label = torch.Tensor(self.labels[idx])
             return label
-
-
-
-
-
