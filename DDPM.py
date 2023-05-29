@@ -5,10 +5,7 @@ from torch.utils.data import DataLoader
 from diffusers import DDPMScheduler
 from dataset import iclevrDataset
 from diffusers.optimization import get_cosine_schedule_with_warmup
-from PIL import Image
 import torch.nn.functional as F
-from accelerate import Accelerator
-import os
 from tqdm import tqdm
 import numpy as np
 from torchvision.utils import make_grid, save_image
@@ -23,8 +20,6 @@ def train(args, model, noise_scheduler, optimizer, train_dataloader, test_datalo
     highest_acc = 0.0
     
     for epoch in tqdm(range(args.resume, args.num_epochs)):
-        
-
         total_loss = 0.0
         for step, batch in enumerate(train_dataloader):
             clean_images, labels = batch
@@ -48,14 +43,10 @@ def train(args, model, noise_scheduler, optimizer, train_dataloader, test_datalo
                 lr_scheduler.step()
             optimizer.zero_grad()
             
-            logs = {"loss": loss.detach().item()}
             global_step += 1
             total_loss += loss.detach().item()
 
         writer.add_scalar("train loss", total_loss/len(train_dataloader), epoch)
-        # After each epoch you optionally sample some demo images with evaluate() and save the model
-        # print("Total loss:", total_loss / len(train_dataloader))
-        # if (epoch > 40):
         if (epoch + 1) % args.eval_freq == 0 or epoch == args.num_epochs - 1:
             acc = test(args, test_dataloader, model, noise_scheduler)
             writer.add_scalar("val acc", acc, epoch)
@@ -64,7 +55,6 @@ def train(args, model, noise_scheduler, optimizer, train_dataloader, test_datalo
                 highest_acc = acc
                 torch.save(model.state_dict(), f"{args.logdir}/{args.unet}Unet/best.pth")
 
-    # if (epoch + 1) % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
             torch.save(model.state_dict(), f"{args.logdir}/{args.unet}Unet/epoch_{epoch+1}.pth")
 
 def test(args, test_dataloader, model, noise_scheduler):
@@ -97,26 +87,31 @@ def test(args, test_dataloader, model, noise_scheduler):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-d', '--device', default='cuda')
-    parser.add_argument('--logdir', default='log/')
+    parser.add_argument('--logdir', default='log')
     # train
-    parser.add_argument('--unet', default="Simple", type=str)
+    parser.add_argument('--unet', default="base", type=str)
     parser.add_argument('--num_epochs', default=150, type=int)
-    parser.add_argument('--train_batch_size', default=32, type=int)
+    parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--lr', default=1e-4, type=float)
-    parser.add_argument('--eval_freq', default=10, type=int)
+    parser.add_argument('--eval_freq', default=25, type=int)
     parser.add_argument('--resume', default=0, type=int)
     parser.add_argument('--lr_warmup_steps', default=500, type=float)
+    parser.add_argument('--scheduler', default='linear', type=str)
     # test
     parser.add_argument('--test_only', action='store_true')
     parser.add_argument('--test_file', default='test', type=str)
 
     args = parser.parse_args()
+
+    if args.scheduler != 'linear':
+        args.logdir = f"{args.logdir}/{args.scheduler}"
+
     train_dataset = iclevrDataset(mode='train', root='./dataset/')
     test_dataset = iclevrDataset(mode='test', root='./dataset/', test_file=f"{args.test_file}.json")
 
     train_dataloader = DataLoader(
         train_dataset, 
-        batch_size=args.train_batch_size,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=12)
     test_dataloader = DataLoader(
@@ -125,8 +120,11 @@ if __name__ == '__main__':
         shuffle=False,
         num_workers=12)
     
-    # model = BigClassConditionedUnet().to(args.device)
-    model = BaseConditionedUnet().to(args.device)
+    if args.unet == "base":
+        model = BaseConditionedUnet().to(args.device)
+    elif args.unet == "shallow":
+        model = ShallowConditionedUnet().to(args.device)
+
     if args.resume != 0:
             stat_ep = args.resume
             print("#"*50)
@@ -135,7 +133,7 @@ if __name__ == '__main__':
             model.load_state_dict(torch.load(f"{args.logdir}/{args.unet}Unet/epoch_{args.resume}.pth"))
 
     # setup diffuser
-    noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule='linear')
+    noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule=args.scheduler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,
