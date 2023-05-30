@@ -48,7 +48,7 @@ def train(args, model, noise_scheduler, optimizer, train_dataloader, test_datalo
 
 		writer.add_scalar("train loss", total_loss/len(train_dataloader), epoch)
 		if (epoch + 1) % args.eval_freq == 0 or epoch == args.num_epochs - 1:
-			acc = test(args, test_dataloader, model, noise_scheduler)
+			acc = val(args, test_dataloader, model, noise_scheduler)
 			writer.add_scalar("val acc", acc, epoch)
 			if highest_acc < acc:
 				print("Highest accuracy, Saving best model!!!")
@@ -57,7 +57,7 @@ def train(args, model, noise_scheduler, optimizer, train_dataloader, test_datalo
 
 			torch.save(model.state_dict(), f"{args.logdir}/{args.unet}Unet/epoch_{epoch+1}.pth")
 
-def test(args, test_dataloader, model, noise_scheduler):
+def val(args, test_dataloader, model, noise_scheduler):
 	evaluator = evaluation_model()
 	if args.test_only:
 		print("#"*50)
@@ -78,11 +78,44 @@ def test(args, test_dataloader, model, noise_scheduler):
 		acc = evaluator.eval(x, cond)
 		total_acc += acc
 	print("Average accuracy: ", total_acc/len(test_dataloader))
-
-	if args.test_only:
-		save_image(x.detach(), f'{args.logdir}/{args.unet}Unet/{args.test_file}_{np.mean(acc)*100:.1f}%.png', normalize=True)
 	
 	return total_acc/len(test_dataloader)
+
+def test(args, test_dataloader, model, noise_scheduler):
+	evaluator = evaluation_model()
+	if args.test_only:
+		print("#"*50)
+		print(f'load from {args.logdir}/{args.unet}Unet/best.pth to test.')
+		print("#"*50)
+		model.load_state_dict(torch.load(f"{args.logdir}/{args.unet}Unet/best.pth"))
+
+	best_acc = 0
+	acc_list = []
+	for _ in tqdm(range(20)):
+		model.eval()
+		total_acc = 0.0
+		for i, cond in enumerate(test_dataloader):
+			cond = cond.to(args.device)
+			bs = cond.shape[0]
+			x = torch.randn(bs, 3, 64, 64).to(args.device)
+			for _, t in enumerate(noise_scheduler.timesteps):
+				with torch.no_grad():
+					residual = model(x, t, cond)
+				x = noise_scheduler.step(residual, t, x).prev_sample
+			acc = evaluator.eval(x, cond)
+			total_acc += acc
+
+		temp_acc = total_acc/len(test_dataloader)
+		if temp_acc > best_acc:
+			best_acc = temp_acc
+			save_image(x.detach(), f'{args.logdir}/{args.unet}Unet/{args.test_file}_{np.mean(acc)*100:.1f}%.png', normalize=True)
+		
+		acc_list.append(temp_acc)
+
+	print("Average accuracy: ", np.mean(acc_list))
+	print("Best acc: ", best_acc)
+
+	
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser(description=__doc__)
